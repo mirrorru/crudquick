@@ -19,6 +19,8 @@ type Table[ROW any] struct {
 	sqlTexts  struct_info.SqlTexts
 }
 
+var _ TypedTable[any] = (*Table[any])(nil)
+
 func NewTableVal[ROW any](d dialect.SQLDialect) Table[ROW] {
 	tableInfo := dot.MustMake(struct_info.GetTableInfo(reflect.TypeFor[ROW]()))
 
@@ -134,4 +136,13 @@ func (t *Table[ROW]) Many(ctx context.Context, tx TxProcessor, filter *Filter) (
 	}
 
 	return result, nil
+}
+
+func (t *Table[ROW]) Fix(ctx context.Context, tx TxProcessor, row *ROW, fixFieldIdx []int) (Result, error) {
+	args := t.tableInfo.Fields.ExtractArgs(row, append(fixFieldIdx, t.tableInfo.PKIdxList...))
+	query := struct_info.SqlBuilderVal.BuildFixSQL(t.dialect, t.tableInfo, fixFieldIdx)
+
+	result, err := tx.ExecContext(ctx, query, args...)
+
+	return result, err
 }

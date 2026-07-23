@@ -215,6 +215,17 @@ func MakeJoinerBase(joinTables JoinTables, d dialect.SQLDialect) (JoinerBase, er
 	totalFltCnt := 0
 	sortPriorityIdx := make([]int, 0, 1)
 	realTableAliases := make([]string, len(joinTables))
+
+	getTableAlias := func(sqlName string, aliasMap map[string]string) string {
+		refTable := sqlName
+		if refAlias, exists := aliasMap[refTable]; exists {
+			refTable = refAlias
+		} else {
+			refTable = realNameAliases[refTable]
+		}
+		return refTable
+	}
+
 	for idx := range joinTables {
 		tInfo := &joinTables[idx]
 		if tInfo.IsFrom {
@@ -291,12 +302,13 @@ func MakeJoinerBase(joinTables JoinTables, d dialect.SQLDialect) (JoinerBase, er
 		}
 	}
 
+	fromTable := joinTables[fromIdx]
 	selSb.WriteString(defs.SQLFrom)
-	selSb.WriteString(joinTables[fromIdx].TableInfo.SQLName)
+	selSb.WriteString(fromTable.TableInfo.SQLName)
 	selSb.WriteString(defs.SQLAs)
 	selSb.WriteString(realTableAliases[fromIdx])
 	defaultJoin := InnerJoin
-	if joinTables[fromIdx].IsPointer {
+	if fromTable.IsPointer {
 		defaultJoin = OuterJoin
 	}
 	for idx, tInfo := range joinTables {
@@ -315,24 +327,52 @@ func MakeJoinerBase(joinTables JoinTables, d dialect.SQLDialect) (JoinerBase, er
 		selSb.WriteString(defs.SQLAs)
 		selSb.WriteString(realTableAliases[idx])
 		selSb.WriteString(defs.SQLOn)
-		if len(tInfo.TableInfo.RefIdxList) == 0 {
-			selSb.WriteString(defs.SQLTrue)
-		}
-		for rPos, rIdx := range tInfo.TableInfo.RefIdxList {
-			if rPos > 0 {
-				selSb.WriteString(defs.SQLAnd)
-			}
-			selSb.WriteString(realTableAliases[idx])
-			selSb.WriteString(defs.SQLDot)
-			selSb.WriteString(tInfo.TableInfo.Fields[rIdx].SQLName)
-			selSb.WriteString(defs.SQLEquals)
-			refTable := tInfo.TableInfo.Fields[rIdx].RefTable
-			if refAlias, exists := tInfo.RefAliasMap[refTable]; exists {
+
+		joinOnTrue := len(tInfo.TableInfo.RefIdxList) == 0
+		addAnd := false
+		// backward references from->join
+		for _, fromRefIdx := range fromTable.TableInfo.RefIdxList {
+			backRefField := fromTable.TableInfo.Fields[fromRefIdx]
+			//
+			refTable := backRefField.RefTable
+			if refAlias, exists := fromTable.RefAliasMap[refTable]; exists {
 				refTable = refAlias
 			} else {
 				refTable = realNameAliases[refTable]
 			}
-			selSb.WriteString(refTable)
+			//
+			if refTable != realTableAliases[idx] {
+				continue
+			}
+			joinOnTrue = false
+			if addAnd {
+				selSb.WriteString(defs.SQLAnd)
+			}
+			addAnd = true
+
+			selSb.WriteString(realTableAliases[idx])
+			selSb.WriteString(defs.SQLDot)
+			selSb.WriteString(backRefField.RefField)
+			selSb.WriteString(defs.SQLEquals)
+			selSb.WriteString(getTableAlias(fromTable.TableInfo.SQLName, tInfo.RefAliasMap))
+			selSb.WriteString(defs.SQLDot)
+			selSb.WriteString(backRefField.SQLName)
+		}
+
+		if joinOnTrue {
+			selSb.WriteString(defs.SQLTrue)
+		}
+		// direct references
+		for _, rIdx := range tInfo.TableInfo.RefIdxList {
+			if addAnd {
+				selSb.WriteString(defs.SQLAnd)
+			}
+			addAnd = true
+			selSb.WriteString(realTableAliases[idx])
+			selSb.WriteString(defs.SQLDot)
+			selSb.WriteString(tInfo.TableInfo.Fields[rIdx].SQLName)
+			selSb.WriteString(defs.SQLEquals)
+			selSb.WriteString(getTableAlias(tInfo.TableInfo.Fields[rIdx].RefTable, tInfo.RefAliasMap))
 			selSb.WriteString(defs.SQLDot)
 			selSb.WriteString(tInfo.TableInfo.Fields[rIdx].RefField)
 		}

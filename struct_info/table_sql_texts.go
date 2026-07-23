@@ -122,7 +122,6 @@ func (b sqlBuilder) buildUpdateSQL(d qc.SQLDialect, ti *TableInfo) string {
 
 	return sb.String()
 }
-
 func (b sqlBuilder) buildDeleteSQL(d qc.SQLDialect, ti *TableInfo) string {
 	if len(ti.PKIdxList) == 0 {
 		return ""
@@ -179,5 +178,32 @@ func buildOrderByClause(ti *TableInfo) string {
 			sb.WriteString(defs.SQLDesc)
 		}
 	}
+	return sb.String()
+}
+
+func (b sqlBuilder) BuildFixSQL(d qc.SQLDialect, ti *TableInfo, fixFieldsIds []int) string {
+	if len(fixFieldsIds) == 0 || len(ti.PKIdxList) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	growSize := 50 + len(fixFieldsIds)*25 + len(ti.PKIdxList)*25
+	if d.SupportsReturning() {
+		growSize += len(ti.SelectIdxList) * 25
+	}
+	sb.Grow(growSize)
+	sb.WriteString(defs.SQLUpdate)
+	sb.WriteString(ti.SQLName)
+	sb.WriteString(defs.SQLSet)
+	for pos, idx := range fixFieldsIds {
+		if pos > 0 {
+			sb.WriteString(defs.SQLCommaSpace)
+		}
+		sb.WriteString(ti.Fields[idx].SQLName)
+		sb.WriteString(defs.SQLEquals)
+		sb.WriteString(d.Placeholder(pos + 1))
+	}
+	b.writeWhereClauses(len(fixFieldsIds), &sb, d, ti)
+
 	return sb.String()
 }

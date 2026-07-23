@@ -3,6 +3,7 @@ package struct_info
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strconv"
@@ -26,7 +27,7 @@ const (
 	KeyHide    = "rskip"   // skip field on selecting
 	KeyPrefix  = "prefix=" // Subcolumns name prefix
 	KeyRef     = "ref="    // FK reference
-	KeySort    = "sort="   // Sort <position>[:desc]
+	KeyOrder   = "order="  // Sort <position>[:desc]
 	KeyDesc    = "desc"    // Descending sort direction
 
 	KeysSeparator  = ";"
@@ -69,10 +70,15 @@ func IsKey(key, val string) bool {
 	return len(val) >= l && val[:l] == key
 }
 
-func ParseFieldTag(tag string) (result FieldTagFlags, ok bool) {
+func ParseFieldTag(tag string) (result FieldTagFlags, ok bool, err error) {
+	if tag == "" {
+		return result, true, nil
+	}
 	keys := strings.Split(tag, KeysSeparator)
 	for _, key := range keys {
 		switch {
+		case key == "":
+			continue
 		case key == KeyPK:
 			result.IsPK = true
 		case key == KeyRO:
@@ -82,7 +88,7 @@ func ParseFieldTag(tag string) (result FieldTagFlags, ok bool) {
 		case key == KeyEmbed:
 			result.Embed = true
 		case IsKey(KeyOmit, key):
-			return result, false // return false !!!
+			return result, false, nil // return false !!!
 		case key == KeyInsert:
 			result.ForceInsert = true
 		case key == KeyUpdate:
@@ -95,11 +101,13 @@ func ParseFieldTag(tag string) (result FieldTagFlags, ok bool) {
 			result.Prefix = key[len(KeyPrefix):]
 		case IsKey(KeyRef, key):
 			result.Ref = key[len(KeyRef):]
-		case IsKey(KeySort, key):
-			result.Sort = key[len(KeySort):]
+		case IsKey(KeyOrder, key):
+			result.Sort = key[len(KeyOrder):]
+		default:
+			return result, false, fmt.Errorf("invalid key %q in tag %q", key, tag)
 		}
 	}
-	return result, true
+	return result, true, nil
 }
 
 var collectTableFieldsCache sync.Map
@@ -132,13 +140,15 @@ func collectFieldInfo(fld reflect.StructField, parentFlags FieldTagFlags) (_ []T
 		return nil, nil
 	}
 
-	flags, processable := ParseFieldTag(fld.Tag.Get(TagName))
-	if !processable {
-		return nil, nil
+	flags, processable, err := ParseFieldTag(fld.Tag.Get(TagName))
+	if !processable || err != nil {
+		return nil, err
 	}
 	flags.Merge(parentFlags)
 
-	if fld.Type.Kind() == reflect.Struct && (fld.Anonymous || flags.Embed || flags.Prefix != "") {
+	if fld.Type.Kind() == reflect.Struct &&
+		flags.ColName == "" && //  Если у поля есть имя, значит оно рассматривается как что-то единое
+		(fld.Anonymous || flags.Embed || flags.Prefix != "") {
 		result := make([]TableField, 0, fld.Type.NumField())
 		// Поле-структура требует "распаковки" на отдельные поля
 		subField := fld.Type

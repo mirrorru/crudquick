@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,17 @@ import (
 type srcSpec struct {
 	path    string
 	pattern string
+}
+
+type srcSpecs []srcSpec
+
+func (s srcSpecs) toArgs() string {
+	var sb strings.Builder
+	sb.Grow(len(s) * 50)
+	for _, spec := range s {
+		_, _ = sb.WriteString(fmt.Sprintf(" -src=%s:%s", spec.path, spec.pattern))
+	}
+	return sb.String()
 }
 
 type genField struct {
@@ -52,7 +64,7 @@ type typeInfo struct {
 }
 
 type genConfig struct {
-	srcs      []srcSpec
+	srcs      srcSpecs
 	dest      string
 	pkg       string
 	noGenStr  bool
@@ -98,6 +110,41 @@ type joinTypeInfo struct {
 	PkgImports map[string]string
 }
 
+func getVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+
+	version := info.Main.Version
+	if version == "" || version == "(devel)" {
+		var vcsRevision, vcsTime string
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				vcsRevision = setting.Value
+			case "vcs.time":
+				vcsTime = setting.Value
+			}
+		}
+		if vcsRevision != "" {
+			if len(vcsRevision) > 12 {
+				vcsRevision = vcsRevision[:12]
+			}
+			if vcsTime != "" {
+				return fmt.Sprintf("0.0.0-%s-%s", vcsTime, vcsRevision)
+			}
+			return vcsRevision
+		}
+		return "(devel)"
+	}
+
+	return version
+}
+
+// workDir - Working directory
+var workDir string
+
 func main() {
 	var srcFlags multiFlag
 	var buildFlags multiFlag
@@ -107,6 +154,7 @@ func main() {
 	var tableFlag bool
 	var joinerFlag bool
 	var help bool
+	var versionFlag bool
 
 	flag.Var(&srcFlags, "src", "Source specification (path:pattern), can be repeated")
 	flag.Var(&buildFlags, "build", "Build tag to add to generated file (can be repeated, joined with ||)")
@@ -116,8 +164,14 @@ func main() {
 	flag.BoolVar(&tableFlag, "table", false, "Generate Table* typed tables (default true if neither -table nor -joiner specified)")
 	flag.BoolVar(&joinerFlag, "joiner", false, "Generate Joiner* typed joiners")
 	flag.BoolVar(&help, "help", false, "Show help")
+	flag.BoolVar(&versionFlag, "version", false, "Show version information")
 
 	flag.Parse()
+
+	if versionFlag {
+		fmt.Printf("crudsgen version %s\n", getVersion())
+		os.Exit(0)
+	}
 
 	if help {
 		printHelp()
@@ -136,7 +190,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	srcs := make([]srcSpec, 0, len(srcFlags))
+	srcs := make(srcSpecs, 0, len(srcFlags))
 	for _, s := range srcFlags {
 		spec := parseSrcSpec(s)
 		srcs = append(srcs, spec)
@@ -178,7 +232,8 @@ func main() {
 }
 
 func printHelp() {
-	fmt.Println("crudsgen - Code generator for typed table and joiner implementations")
+	fmt.Printf("crudsgen version %s\n", getVersion())
+	fmt.Println("Code generator for typed table and joiner implementations")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  crudsgen -src=<path:pattern> [-src=...] -dest=<dir> [-pkg=<name>] [-no-genstr] [-build=<build-tag>] [-table] [-joiner]")
@@ -200,6 +255,7 @@ func printHelp() {
 	fmt.Println("  -table      Generate Table* typed tables (default if neither -table nor -joiner specified)")
 	fmt.Println("  -joiner     Generate Joiner* typed joiners")
 	fmt.Println("  -help       Show this help")
+	fmt.Println("  -version    Show version information")
 }
 
 type multiFlag []string
@@ -245,12 +301,17 @@ func parseSrcSpec(s string) srcSpec {
 	return spec
 }
 
-func run(cfg genConfig) error {
-	if err := os.MkdirAll(cfg.dest, 0750); err != nil {
+func run(cfg genConfig) (err error) {
+	workDir, err = os.Getwd()
+	if err != nil {
+		return err
+	}
+
+	if err = os.MkdirAll(cfg.dest, 0750); err != nil {
 		return fmt.Errorf("failed to create dest directory: %w", err)
 	}
 
-	allTypes := make([]typeInfo, 0)
+	allTableTypes := make([]typeInfo, 0)
 	allJoinTypes := make([]joinTypeInfo, 0)
 
 	var globalRegistry map[string]*pkgTypeEntry
@@ -269,7 +330,7 @@ func run(cfg genConfig) error {
 			if err != nil {
 				return fmt.Errorf("failed to find types in %s: %w", src.path, err)
 			}
-			allTypes = append(allTypes, types...)
+			allTableTypes = append(allTableTypes, types...)
 		}
 
 		if cfg.genJoiner {
@@ -284,13 +345,13 @@ func run(cfg genConfig) error {
 		}
 	}
 
-	if len(allTypes) == 0 && len(allJoinTypes) == 0 {
+	if len(allTableTypes) == 0 && len(allJoinTypes) == 0 {
 		fmt.Println("No matching types found")
 		return nil
 	}
 
-	for _, t := range allTypes {
-		if err := generateFile(cfg, t); err != nil {
+	for _, t := range allTableTypes {
+		if err := generateTableFile(cfg, t); err != nil {
 			return fmt.Errorf("failed to generate %s: %w", t.Name, err)
 		}
 		fmt.Printf("Generated Table%s for %s.%s\n", t.Name, t.PkgName, t.Name)
@@ -306,7 +367,7 @@ func run(cfg genConfig) error {
 	return nil
 }
 
-func buildGlobalRegistry(specs []srcSpec) (map[string]*pkgTypeEntry, map[string]string, error) {
+func buildGlobalRegistry(specs srcSpecs) (map[string]*pkgTypeEntry, map[string]string, error) {
 	registry := make(map[string]*pkgTypeEntry)
 	pkgImports := make(map[string]string)
 
@@ -320,7 +381,7 @@ func buildGlobalRegistry(specs []srcSpec) (map[string]*pkgTypeEntry, map[string]
 		processed[absDir] = true
 	}
 
-	modRoot := filepath.Dir(mustFindGoMod("."))
+	modRoot := filepath.Dir(mustFindGoMod(workDir))
 	modName := findModuleName(modRoot)
 	if modName == "" {
 		return nil, nil, errors.New("failed to find module name")
@@ -557,7 +618,11 @@ func findTypes(dir, pattern string) ([]typeInfo, error) {
 			}
 		}
 
-		fields := parseStructFields(structType, localReg, m.pkgName)
+		fields, parseErr := parseStructFields(structType, localReg, m.pkgName)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+
 		sqlName, hasSQLName := extractSQLName(m.file, m.typeName)
 		if !hasSQLName {
 			sqlName = helpers.ToSnakeCase(m.typeName)
@@ -671,14 +736,17 @@ func findJoinTypes(dir, pattern string, registry map[string]*pkgTypeEntry) ([]jo
 	return result, nil
 }
 
-func parseJoinStructFields(structType *ast.StructType, registry map[string]*pkgTypeEntry, localPkgName string) ([]joinFieldInfo, bool) {
+func parseJoinStructFields(structType *ast.StructType, registry map[string]*pkgTypeEntry, localPkgName string) ([]joinFieldInfo, bool, error) {
 	var result []joinFieldInfo
 	hasJoinFields := false
 
 	for _, field := range structType.Fields.List {
 		if len(field.Names) == 0 {
 			if entry, ok := registry[registryKey(localPkgName, getTypeName(field.Type))]; ok {
-				subFields, subIsJoin := parseJoinStructFields(entry.structType, registry, entry.pkgName)
+				subFields, subIsJoin, err := parseJoinStructFields(entry.structType, registry, entry.pkgName)
+				if err != nil {
+					return nil, false, err
+				}
 				if subIsJoin {
 					result = append(result, subFields...)
 					hasJoinFields = true
@@ -722,7 +790,10 @@ func parseJoinStructFields(structType *ast.StructType, registry map[string]*pkgT
 
 		hasJoinFields = true
 
-		subFields := parseStructFields(entry.structType, registry, entry.pkgName)
+		subFields, parseErr := parseStructFields(entry.structType, registry, entry.pkgName)
+		if parseErr != nil {
+			return nil, false, parseErr
+		}
 		sqlName, hasSQLName := findSQLName(entry, registry)
 		if !hasSQLName {
 			sqlName = helpers.ToSnakeCase(typeName)
@@ -770,10 +841,10 @@ func parseJoinStructFields(structType *ast.StructType, registry map[string]*pkgT
 	}
 
 	if !hasJoinFields {
-		return nil, false
+		return nil, false, nil
 	}
 
-	return result, true
+	return result, true, nil
 }
 
 func findSQLName(entry *pkgTypeEntry, registry map[string]*pkgTypeEntry) (string, bool) {
@@ -806,18 +877,21 @@ func extractSQLNameEmbd(file *ast.File, structType *ast.StructType, registry map
 	return "", false
 }
 
-func parseStructFields(structType *ast.StructType, registry map[string]*pkgTypeEntry, pkgName string) []genField {
+func parseStructFields(structType *ast.StructType, registry map[string]*pkgTypeEntry, pkgName string) ([]genField, error) {
 	var result []genField
 	for _, field := range structType.Fields.List {
-		fields := collectFieldInfo(field, registry, struct_info.FieldTagFlags{}, nil, pkgName)
+		fields, err := collectFieldInfo(field, registry, struct_info.FieldTagFlags{}, nil, pkgName)
+		if err != nil {
+			return nil, err
+		}
 		result = append(result, fields...)
 	}
-	return result
+	return result, nil
 }
 
-func collectFieldInfo(field *ast.Field, registry map[string]*pkgTypeEntry, parentFlags struct_info.FieldTagFlags, parentPath []string, pkgName string) []genField {
+func collectFieldInfo(field *ast.Field, registry map[string]*pkgTypeEntry, parentFlags struct_info.FieldTagFlags, parentPath []string, pkgName string) ([]genField, error) {
 	if len(field.Names) > 0 && !field.Names[0].IsExported() {
-		return nil
+		return nil, nil
 	}
 
 	var tagStr string
@@ -829,9 +903,9 @@ func collectFieldInfo(field *ast.Field, registry map[string]*pkgTypeEntry, paren
 		tagStr = extractTblTag(tagStr)
 	}
 
-	flags, processable := struct_info.ParseFieldTag(tagStr)
-	if !processable {
-		return nil
+	flags, processable, err := struct_info.ParseFieldTag(tagStr)
+	if !processable || err != nil {
+		return nil, err
 	}
 	flags.Merge(parentFlags)
 
@@ -863,15 +937,18 @@ func collectFieldInfo(field *ast.Field, registry map[string]*pkgTypeEntry, paren
 			newPath[len(parentPath)] = fieldName
 
 			for _, subField := range embeddedStruct.Fields.List {
-				subFields := collectFieldInfo(subField, registry, flags, newPath, embeddedPkgName)
+				subFields, errCollect := collectFieldInfo(subField, registry, flags, newPath, embeddedPkgName)
+				if errCollect != nil {
+					return nil, errCollect
+				}
 				result = append(result, subFields...)
 			}
-			return result
+			return result, nil
 		}
 	}
 
 	if len(field.Names) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	fieldName := field.Names[0].Name
@@ -920,7 +997,7 @@ func collectFieldInfo(field *ast.Field, registry map[string]*pkgTypeEntry, paren
 		SortBackward: sortBackward,
 		RefTable:     refTable,
 		RefField:     refField,
-	}}
+	}}, nil
 }
 
 func getTypeName(expr ast.Expr) string {
@@ -1065,7 +1142,8 @@ func extractSQLName(file *ast.File, typeName string) (string, bool) {
 func mustFindGoMod(dir string) string {
 	path, err := findGoMod(dir)
 	if err != nil {
-		panic(err)
+		fmt.Println("can't find go mod")
+		os.Exit(1)
 	}
 	return path
 }
@@ -1114,7 +1192,7 @@ func buildTagLine(tags []string) string {
 	return "//go:build " + strings.Join(tags, " || ")
 }
 
-func generateFile(cfg genConfig, t typeInfo) error {
+func generateTableFile(cfg genConfig, t typeInfo) error {
 	fileName := strings.ToLower("table_" + t.Name + ".go")
 	filePath := filepath.Join(cfg.dest, fileName)
 
@@ -1162,6 +1240,7 @@ func generateFile(cfg genConfig, t typeInfo) error {
 	data := struct {
 		BuildTag         string
 		GoGenerate       string
+		Version          string
 		Package          string
 		TypeInfo         typeInfo
 		QualTypeName     string
@@ -1179,6 +1258,7 @@ func generateFile(cfg genConfig, t typeInfo) error {
 	}{
 		BuildTag:         buildTagLine(cfg.builds),
 		GoGenerate:       "",
+		Version:          getVersion(),
 		Package:          cfg.pkg,
 		TypeInfo:         t,
 		QualTypeName:     qualTableType,
@@ -1196,8 +1276,7 @@ func generateFile(cfg genConfig, t typeInfo) error {
 	}
 
 	if !cfg.noGenStr {
-		args := fmt.Sprintf("-src=%s:%s -dest=%s -pkg=%s",
-			filepath.Dir(mustFindGoMod(".")), "*", cfg.dest, cfg.pkg)
+		args := fmt.Sprintf("%s -dest=%s -pkg=%s -table", cfg.srcs.toArgs(), cfg.dest, cfg.pkg)
 		data.GoGenerate = "//go:generate crudsgen " + args
 	}
 
@@ -1211,7 +1290,7 @@ func generateFile(cfg genConfig, t typeInfo) error {
 
 const tableTemplate = `{{if .BuildTag}}{{.BuildTag}}
 {{end}}{{if .GoGenerate}}{{.GoGenerate}}
-{{end}}// Code generated by crudsgen; DO NOT EDIT.
+{{end}}// Code generated by crudsgen v{{.Version}}; DO NOT EDIT.
 
 package {{.Package}}
 
@@ -1532,8 +1611,7 @@ func generateJoinerFile(cfg genConfig, jt joinTypeInfo) error {
 
 	goGenStr := ""
 	if !cfg.noGenStr {
-		args := fmt.Sprintf("-src=%s:%s -dest=%s -pkg=%s -joiner",
-			filepath.Dir(mustFindGoMod(".")), "*", cfg.dest, cfg.pkg)
+		args := fmt.Sprintf("%s -dest=%s -pkg=%s -joiner", cfg.srcs.toArgs(), cfg.dest, cfg.pkg)
 		goGenStr = "//go:generate crudsgen " + args
 	}
 
@@ -1545,6 +1623,7 @@ func generateJoinerFile(cfg genConfig, jt joinTypeInfo) error {
 	data := struct {
 		BuildTag     string
 		GoGenerate   string
+		Version      string
 		Package      string
 		TypeInfo     joinTypeInfo
 		SubTables    []subTableTmpl
@@ -1556,6 +1635,7 @@ func generateJoinerFile(cfg genConfig, jt joinTypeInfo) error {
 	}{
 		BuildTag:     buildTagLine(cfg.builds),
 		GoGenerate:   goGenStr,
+		Version:      getVersion(),
 		Package:      cfg.pkg,
 		TypeInfo:     jt,
 		SubTables:    subTables,
@@ -1669,7 +1749,7 @@ func sortOrderIdx(subTables []subTableTmpl) []int {
 
 const joinerTemplate = `{{if .BuildTag}}{{.BuildTag}}
 {{end}}{{if .GoGenerate}}{{.GoGenerate}}
-{{end}}// Code generated by crudsgen; DO NOT EDIT.
+{{end}}// Code generated by crudsgen v{{.Version}}; DO NOT EDIT.
 //nolint:lll
 package {{.Package}}
 
