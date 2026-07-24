@@ -27,6 +27,17 @@ type srcSpec struct {
 	pattern string
 }
 
+type srcSpecs []srcSpec
+
+func (s srcSpecs) toArgs() string {
+	var sb strings.Builder
+	sb.Grow(len(s) * 50)
+	for _, spec := range s {
+		_, _ = sb.WriteString(fmt.Sprintf(" -src=%s:%s", spec.path, spec.pattern))
+	}
+	return sb.String()
+}
+
 type genField struct {
 	Name         string
 	AccessExpr   string
@@ -53,7 +64,7 @@ type typeInfo struct {
 }
 
 type genConfig struct {
-	srcs      []srcSpec
+	srcs      srcSpecs
 	dest      string
 	pkg       string
 	noGenStr  bool
@@ -179,7 +190,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	srcs := make([]srcSpec, 0, len(srcFlags))
+	srcs := make(srcSpecs, 0, len(srcFlags))
 	for _, s := range srcFlags {
 		spec := parseSrcSpec(s)
 		srcs = append(srcs, spec)
@@ -300,7 +311,7 @@ func run(cfg genConfig) (err error) {
 		return fmt.Errorf("failed to create dest directory: %w", err)
 	}
 
-	allTypes := make([]typeInfo, 0)
+	allTableTypes := make([]typeInfo, 0)
 	allJoinTypes := make([]joinTypeInfo, 0)
 
 	var globalRegistry map[string]*pkgTypeEntry
@@ -319,7 +330,7 @@ func run(cfg genConfig) (err error) {
 			if err != nil {
 				return fmt.Errorf("failed to find types in %s: %w", src.path, err)
 			}
-			allTypes = append(allTypes, types...)
+			allTableTypes = append(allTableTypes, types...)
 		}
 
 		if cfg.genJoiner {
@@ -334,13 +345,13 @@ func run(cfg genConfig) (err error) {
 		}
 	}
 
-	if len(allTypes) == 0 && len(allJoinTypes) == 0 {
+	if len(allTableTypes) == 0 && len(allJoinTypes) == 0 {
 		fmt.Println("No matching types found")
 		return nil
 	}
 
-	for _, t := range allTypes {
-		if err := generateFile(cfg, t); err != nil {
+	for _, t := range allTableTypes {
+		if err := generateTableFile(cfg, t); err != nil {
 			return fmt.Errorf("failed to generate %s: %w", t.Name, err)
 		}
 		fmt.Printf("Generated Table%s for %s.%s\n", t.Name, t.PkgName, t.Name)
@@ -356,7 +367,7 @@ func run(cfg genConfig) (err error) {
 	return nil
 }
 
-func buildGlobalRegistry(specs []srcSpec) (map[string]*pkgTypeEntry, map[string]string, error) {
+func buildGlobalRegistry(specs srcSpecs) (map[string]*pkgTypeEntry, map[string]string, error) {
 	registry := make(map[string]*pkgTypeEntry)
 	pkgImports := make(map[string]string)
 
@@ -1165,7 +1176,7 @@ func buildTagLine(tags []string) string {
 	return "//go:build " + strings.Join(tags, " || ")
 }
 
-func generateFile(cfg genConfig, t typeInfo) error {
+func generateTableFile(cfg genConfig, t typeInfo) error {
 	fileName := strings.ToLower("table_" + t.Name + ".go")
 	filePath := filepath.Join(cfg.dest, fileName)
 
@@ -1249,8 +1260,7 @@ func generateFile(cfg genConfig, t typeInfo) error {
 	}
 
 	if !cfg.noGenStr {
-		args := fmt.Sprintf("-src=%s:%s -dest=%s -pkg=%s",
-			filepath.Dir(mustFindGoMod(workDir)), "*", cfg.dest, cfg.pkg)
+		args := fmt.Sprintf("%s -dest=%s -pkg=%s -table", cfg.srcs.toArgs(), cfg.dest, cfg.pkg)
 		data.GoGenerate = "//go:generate crudsgen " + args
 	}
 
@@ -1585,8 +1595,7 @@ func generateJoinerFile(cfg genConfig, jt joinTypeInfo) error {
 
 	goGenStr := ""
 	if !cfg.noGenStr {
-		args := fmt.Sprintf("-src=%s:%s -dest=%s -pkg=%s -joiner",
-			filepath.Dir(mustFindGoMod(workDir)), "*", cfg.dest, cfg.pkg)
+		args := fmt.Sprintf("%s -dest=%s -pkg=%s -joiner", cfg.srcs.toArgs(), cfg.dest, cfg.pkg)
 		goGenStr = "//go:generate crudsgen " + args
 	}
 
