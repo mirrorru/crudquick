@@ -131,6 +131,9 @@ func getVersion() string {
 	return version
 }
 
+// workDir - Working directory
+var workDir string
+
 func main() {
 	var srcFlags multiFlag
 	var buildFlags multiFlag
@@ -287,8 +290,13 @@ func parseSrcSpec(s string) srcSpec {
 	return spec
 }
 
-func run(cfg genConfig) error {
-	if err := os.MkdirAll(cfg.dest, 0750); err != nil {
+func run(cfg genConfig) (err error) {
+	workDir, err = os.Getwd()
+	if err != nil {
+		return err
+	}
+
+	if err = os.MkdirAll(cfg.dest, 0750); err != nil {
 		return fmt.Errorf("failed to create dest directory: %w", err)
 	}
 
@@ -362,7 +370,7 @@ func buildGlobalRegistry(specs []srcSpec) (map[string]*pkgTypeEntry, map[string]
 		processed[absDir] = true
 	}
 
-	modRoot := filepath.Dir(mustFindGoMod("."))
+	modRoot := filepath.Dir(mustFindGoMod(workDir))
 	modName := findModuleName(modRoot)
 	if modName == "" {
 		return nil, nil, errors.New("failed to find module name")
@@ -1107,7 +1115,8 @@ func extractSQLName(file *ast.File, typeName string) (string, bool) {
 func mustFindGoMod(dir string) string {
 	path, err := findGoMod(dir)
 	if err != nil {
-		panic(err)
+		fmt.Println("can't find go mod")
+		os.Exit(1)
 	}
 	return path
 }
@@ -1241,7 +1250,7 @@ func generateFile(cfg genConfig, t typeInfo) error {
 
 	if !cfg.noGenStr {
 		args := fmt.Sprintf("-src=%s:%s -dest=%s -pkg=%s",
-			filepath.Dir(mustFindGoMod(".")), "*", cfg.dest, cfg.pkg)
+			filepath.Dir(mustFindGoMod(workDir)), "*", cfg.dest, cfg.pkg)
 		data.GoGenerate = "//go:generate crudsgen " + args
 	}
 
@@ -1577,7 +1586,7 @@ func generateJoinerFile(cfg genConfig, jt joinTypeInfo) error {
 	goGenStr := ""
 	if !cfg.noGenStr {
 		args := fmt.Sprintf("-src=%s:%s -dest=%s -pkg=%s -joiner",
-			filepath.Dir(mustFindGoMod(".")), "*", cfg.dest, cfg.pkg)
+			filepath.Dir(mustFindGoMod(workDir)), "*", cfg.dest, cfg.pkg)
 		goGenStr = "//go:generate crudsgen " + args
 	}
 
