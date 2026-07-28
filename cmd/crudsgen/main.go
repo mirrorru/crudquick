@@ -618,7 +618,11 @@ func findTypes(dir, pattern string) ([]typeInfo, error) {
 			}
 		}
 
-		fields := parseStructFields(structType, localReg, m.pkgName)
+		fields, parseErr := parseStructFields(structType, localReg, m.pkgName)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+
 		sqlName, hasSQLName := extractSQLName(m.file, m.typeName)
 		if !hasSQLName {
 			sqlName = helpers.ToSnakeCase(m.typeName)
@@ -732,14 +736,17 @@ func findJoinTypes(dir, pattern string, registry map[string]*pkgTypeEntry) ([]jo
 	return result, nil
 }
 
-func parseJoinStructFields(structType *ast.StructType, registry map[string]*pkgTypeEntry, localPkgName string) ([]joinFieldInfo, bool) {
+func parseJoinStructFields(structType *ast.StructType, registry map[string]*pkgTypeEntry, localPkgName string) ([]joinFieldInfo, bool, error) {
 	var result []joinFieldInfo
 	hasJoinFields := false
 
 	for _, field := range structType.Fields.List {
 		if len(field.Names) == 0 {
 			if entry, ok := registry[registryKey(localPkgName, getTypeName(field.Type))]; ok {
-				subFields, subIsJoin := parseJoinStructFields(entry.structType, registry, entry.pkgName)
+				subFields, subIsJoin, err := parseJoinStructFields(entry.structType, registry, entry.pkgName)
+				if err != nil {
+					return nil, false, err
+				}
 				if subIsJoin {
 					result = append(result, subFields...)
 					hasJoinFields = true
@@ -783,7 +790,10 @@ func parseJoinStructFields(structType *ast.StructType, registry map[string]*pkgT
 
 		hasJoinFields = true
 
-		subFields := parseStructFields(entry.structType, registry, entry.pkgName)
+		subFields, parseErr := parseStructFields(entry.structType, registry, entry.pkgName)
+		if parseErr != nil {
+			return nil, false, parseErr
+		}
 		sqlName, hasSQLName := findSQLName(entry, registry)
 		if !hasSQLName {
 			sqlName = helpers.ToSnakeCase(typeName)
@@ -831,10 +841,10 @@ func parseJoinStructFields(structType *ast.StructType, registry map[string]*pkgT
 	}
 
 	if !hasJoinFields {
-		return nil, false
+		return nil, false, nil
 	}
 
-	return result, true
+	return result, true, nil
 }
 
 func findSQLName(entry *pkgTypeEntry, registry map[string]*pkgTypeEntry) (string, bool) {
@@ -867,18 +877,21 @@ func extractSQLNameEmbd(file *ast.File, structType *ast.StructType, registry map
 	return "", false
 }
 
-func parseStructFields(structType *ast.StructType, registry map[string]*pkgTypeEntry, pkgName string) []genField {
+func parseStructFields(structType *ast.StructType, registry map[string]*pkgTypeEntry, pkgName string) ([]genField, error) {
 	var result []genField
 	for _, field := range structType.Fields.List {
-		fields := collectFieldInfo(field, registry, struct_info.FieldTagFlags{}, nil, pkgName)
+		fields, err := collectFieldInfo(field, registry, struct_info.FieldTagFlags{}, nil, pkgName)
+		if err != nil {
+			return nil, err
+		}
 		result = append(result, fields...)
 	}
-	return result
+	return result, nil
 }
 
-func collectFieldInfo(field *ast.Field, registry map[string]*pkgTypeEntry, parentFlags struct_info.FieldTagFlags, parentPath []string, pkgName string) []genField {
+func collectFieldInfo(field *ast.Field, registry map[string]*pkgTypeEntry, parentFlags struct_info.FieldTagFlags, parentPath []string, pkgName string) ([]genField, error) {
 	if len(field.Names) > 0 && !field.Names[0].IsExported() {
-		return nil
+		return nil, nil
 	}
 
 	var tagStr string
@@ -890,9 +903,9 @@ func collectFieldInfo(field *ast.Field, registry map[string]*pkgTypeEntry, paren
 		tagStr = extractTblTag(tagStr)
 	}
 
-	flags, processable := struct_info.ParseFieldTag(tagStr)
-	if !processable {
-		return nil
+	flags, processable, err := struct_info.ParseFieldTag(tagStr)
+	if !processable || err != nil {
+		return nil, err
 	}
 	flags.Merge(parentFlags)
 
@@ -924,15 +937,18 @@ func collectFieldInfo(field *ast.Field, registry map[string]*pkgTypeEntry, paren
 			newPath[len(parentPath)] = fieldName
 
 			for _, subField := range embeddedStruct.Fields.List {
-				subFields := collectFieldInfo(subField, registry, flags, newPath, embeddedPkgName)
+				subFields, errCollect := collectFieldInfo(subField, registry, flags, newPath, embeddedPkgName)
+				if errCollect != nil {
+					return nil, errCollect
+				}
 				result = append(result, subFields...)
 			}
-			return result
+			return result, nil
 		}
 	}
 
 	if len(field.Names) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	fieldName := field.Names[0].Name
@@ -981,7 +997,7 @@ func collectFieldInfo(field *ast.Field, registry map[string]*pkgTypeEntry, paren
 		SortBackward: sortBackward,
 		RefTable:     refTable,
 		RefField:     refField,
-	}}
+	}}, nil
 }
 
 func getTypeName(expr ast.Expr) string {

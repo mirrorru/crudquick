@@ -12,6 +12,7 @@ type TypedTable[ROW any] interface {
 	One(ctx context.Context, tx TxProcessor, keys ...any) (*ROW, error)
 	Del(ctx context.Context, tx TxProcessor, keys ...any) (Result, error)
 	Many(ctx context.Context, tx TxProcessor, filter *Filter) ([]*ROW, error)
+	Fix(ctx context.Context, tx TxProcessor, row *ROW, fixFieldIdx []int) (Result, error)
 }
 
 // TypedJoiner defines the interface for typed table joiner implementations.

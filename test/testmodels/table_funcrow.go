@@ -13,7 +13,6 @@ import (
 	"github.com/mirrorru/cruds/defs"
 	"github.com/mirrorru/cruds/dialect"
 	"github.com/mirrorru/cruds/struct_info"
-
 )
 
 var _ cruds.TypedTable[FuncRow] = (*TableFuncRow)(nil)
@@ -22,6 +21,11 @@ type TableFuncRow struct {
 	dialect   dialect.SQLDialect
 	tableInfo struct_info.TableInfo
 	sqlTexts  struct_info.SqlTexts
+}
+
+func (t *TableFuncRow) Fix(ctx context.Context, tx cruds.TxProcessor, row *ROW, fixFieldIdx []int)  (Result, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 type tableFuncRowInternals struct {
