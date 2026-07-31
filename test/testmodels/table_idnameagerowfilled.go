@@ -22,7 +22,7 @@ type TableIdNameAgeRowFilled struct {
 	sqlTexts  struct_info.SqlTexts
 }
 
-func (t *TableIdNameAgeRowFilled) Fix(ctx context.context.Context, tx cruds.TxProcessor, row *ROW, fixFieldIdx []int)  (Result, error) {
+func (t *TableIdNameAgeRowFilled) Fix(ctx context.Context, tx cruds.TxProcessor, row *ROW, fixFieldIdx []int)  (Result, error) {
 	//TODO implement me
 	panic("implement me")
 }

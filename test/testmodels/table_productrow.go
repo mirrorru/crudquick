@@ -23,7 +23,7 @@ type TableProductRow struct {
 	sqlTexts  struct_info.SqlTexts
 }
 
-func (t *TableProductRow) Fix(ctx context.context.Context, tx cruds.TxProcessor, row *ROW, fixFieldIdx []int)  (Result, error) {
+func (t *TableProductRow) Fix(ctx context.Context, tx cruds.TxProcessor, row *ROW, fixFieldIdx []int)  (Result, error) {
 	//TODO implement me
 	panic("implement me")
 }
