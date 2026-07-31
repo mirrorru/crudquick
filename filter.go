@@ -96,8 +96,8 @@ func (cn ConditionNode) Build(tf struct_info.TableFields, d dialect.SQLDialect, 
 	switch cn.Op {
 	case CmdEq, CmdNotEq, CmdGt, CmdGte, CmdLt, CmdLte, CmdLike:
 		op := cmdOpToSQL(cn.Op)
-		p := d.Placeholder(*argIdx)
 		*argIdx++
+		p := d.Placeholder(*argIdx)
 		return col + op + p, []any{cn.Value}, nil
 
 	case CmdIn:
@@ -107,16 +107,16 @@ func (cn ConditionNode) Build(tf struct_info.TableFields, d dialect.SQLDialect, 
 		}
 		placeholders := make([]string, len(vals))
 		for i := range vals {
-			placeholders[i] = d.Placeholder(*argIdx)
 			*argIdx++
+			placeholders[i] = d.Placeholder(*argIdx)
 		}
 		return col + defs.SQLIn + defs.SQLOpenParen +
 			strings.Join(placeholders, defs.SQLCommaSpace) +
 			defs.SQLCloseParen, vals, nil
 
 	case CmdILike:
-		p := d.Placeholder(*argIdx)
 		*argIdx++
+		p := d.Placeholder(*argIdx)
 		return d.ILIKE(col, p), []any{cn.Value}, nil
 
 	case CmdIsNull:
