@@ -720,7 +720,10 @@ func findJoinTypes(dir, pattern string, registry map[string]*pkgTypeEntry) ([]jo
 			continue
 		}
 
-		jFields, isJoin := parseJoinStructFields(structType, registry, m.pkgName)
+		jFields, isJoin, parseErr := parseJoinStructFields(structType, registry, m.pkgName)
+		if parseErr != nil {
+			return nil, parseErr
+		}
 		if !isJoin || len(jFields) == 0 {
 			continue
 		}
