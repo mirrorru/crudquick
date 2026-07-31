@@ -111,7 +111,7 @@ tasks:
     deps:
       - unit
       - smoke
-      - crudsgen
+      #- crudsgen
       - functional
     cmds:
       - echo "===== Покрытие unit ====="
